@@ -1,134 +1,153 @@
 import requests
-import pandas as pd
 import time
-import schedule
-from ta.trend import EMAIndicator, ADXIndicator
-from ta.momentum import RSIIndicator
+import datetime
 
-# ================= CONFIG =================
+# ===== CONFIG =====
 BOT_TOKEN = "8840298233:AAG0jITQkx_pO2ySn3u44TdHacC5WsKwfhE"
-CHAT_ID = "@PROFIT_ZONE_947"
-
+CHAT_ID = "YOUR_CHAT_ID"
 API_KEY = "aa164586e0b24b348f49fd3b534ce8cc"
 
-PAIRS = ["EUR/USD", "GBP/JPY", "USD/JPY"]
-INTERVAL = "5min"
+PAIRS = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD"]
+INTERVAL = "1min"
 
-# ================= TELEGRAM =================
+# ===== TELEGRAM =====
 def send(msg):
-    try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
-    except Exception as e:
-        print("Telegram Error:", e)
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
 
-# ================= SAFE DATA FETCH =================
+# ===== GET DATA =====
 def get_data(pair):
-    try:
-        url = "https://api.twelvedata.com/time_series"
+    url = "https://api.twelvedata.com/time_series"
+    params = {
+        "symbol": pair,
+        "interval": INTERVAL,
+        "outputsize": 50,
+        "apikey": API_KEY
+    }
 
-        params = {
-            "symbol": pair,
-            "interval": INTERVAL,
-            "outputsize": 100,
-            "apikey": API_KEY
-        }
+    res = requests.get(url, params=params).json()
 
-        response = requests.get(url, params=params, timeout=10)
-        data = response.json()
-
-        # ❌ API error check
-        if "status" in data and data["status"] == "error":
-            print("API Error:", data.get("message"))
-            return None
-
-        if "values" not in data:
-            print("No data for:", pair)
-            return None
-
-        df = pd.DataFrame(data["values"])
-        df = df.iloc[::-1]
-
-        df["close"] = df["close"].astype(float)
-        df["high"] = df["high"].astype(float)
-        df["low"] = df["low"].astype(float)
-
-        return df
-
-    except Exception as e:
-        print("Data fetch error:", e)
+    if "values" not in res:
+        print("API error:", pair, res)
         return None
 
-# ================= STRATEGY =================
-def signal(df):
-    try:
-        df["ema"] = EMAIndicator(df["close"], window=20).ema_indicator()
-        df["rsi"] = RSIIndicator(df["close"], window=14).rsi()
-        df["adx"] = ADXIndicator(df["high"], df["low"], df["close"], window=14).adx()
+    return res["values"]
 
-        last = df.iloc[-1]
-        prev = df.iloc[-2]
+# ===== WAIT FOR CANDLE CLOSE =====
+def wait_for_candle_close():
+    while True:
+        now = datetime.datetime.now()
+        if now.second >= 58:
+            break
+        time.sleep(0.5)
 
-        price = last["close"]
+# ===== SIGNAL ANALYSIS (PRO LOGIC) =====
+def analyze_pair(data):
+    closes = [float(c["close"]) for c in reversed(data)]
 
-        # SIDEWAYS FILTER
-        if last["adx"] < 20:
-            return None
+    current = closes[-1]
+    prev = closes[-2]
 
-        # BUY
-        if price > last["ema"] and last["rsi"] < 40 and price > prev["close"]:
-            return "BUY"
+    score = 0
+    signal = None
 
-        # SELL
-        if price < last["ema"] and last["rsi"] > 60 and price < prev["close"]:
-            return "SELL"
+    # ===== TREND =====
+    up_trend = closes[-1] > closes[-2] > closes[-3] > closes[-4]
+    down_trend = closes[-1] < closes[-2] < closes[-3] < closes[-4]
 
+    # ===== VOLATILITY FILTER =====
+    volatility = max(closes[-5:]) - min(closes[-5:])
+    if volatility < 0.0004:
+        return None  # sideways
+
+    # ===== MOMENTUM =====
+    momentum = abs(current - prev)
+    if momentum > 0.0002:
+        score += 2
+
+    # ===== PULLBACK ENTRY =====
+    if up_trend and current < prev:
+        score += 3
+        signal = "CALL 📈"
+
+    elif down_trend and current > prev:
+        score += 3
+        signal = "PUT 📉"
+
+    # ===== TREND BONUS =====
+    if up_trend or down_trend:
+        score += 2
+
+    if signal is None:
         return None
 
-    except Exception as e:
-        print("Signal error:", e)
-        return None
+    return {
+        "signal": signal,
+        "score": score,
+        "price": current
+    }
 
-# ================= SIGNAL SEND =================
-def send_signal(pair, sig, price):
+# ===== SEND SIGNAL =====
+def send_signal(pair, signal, price):
+    now = datetime.datetime.now()
+
+    entry_time = now.strftime("%H:%M:%S")
+    expiry_time = (now + datetime.timedelta(minutes=2)).strftime("%H:%M:%S")
+
     msg = f"""
-📊 FOREX SIGNAL
+📊 BINARY SIGNAL (PRO)
 
 Pair: {pair}
-Timeframe: {INTERVAL}
+Signal: {signal}
 
-Signal: {sig}
-Entry: {price}
+⏰ Entry: {entry_time}
+⌛ Expiry: {expiry_time}
 
-📈 Strategy: EMA + RSI + ADX
+💰 Price: {price}
+
+🔥 High Probability Setup
 """
+
     send(msg)
 
-# ================= MAIN BOT =================
-def run_bot():
-    print("Running cycle...")
-
-    for pair in PAIRS:
-        df = get_data(pair)
-
-        if df is None or len(df) < 50:
-            continue
-
-        sig = signal(df)
-        price = df["close"].iloc[-1]
-
-        if sig:
-            send_signal(pair, sig, price)
-
-    print("Cycle completed")
-
-# ================= LOOP =================
-schedule.every(5).minutes.do(run_bot)
-
-print("Bot Started Successfully...")
-
-import time
+# ===== MAIN LOOP =====
+print("🔥 PRO BOT RUNNING...")
 
 while True:
-    schedule.run_pending()
-    time.sleep(1)
+    wait_for_candle_close()
+    time.sleep(1)  # ensure candle closed
+
+    best_trade = None
+
+    for pair in PAIRS:
+        data = get_data(pair)
+
+        if not data:
+            continue
+
+        result = analyze_pair(data)
+
+        if not result:
+            continue
+
+        if (best_trade is None) or (result["score"] > best_trade["score"]):
+            best_trade = {
+                "pair": pair,
+                "signal": result["signal"],
+                "score": result["score"],
+                "price": result["price"]
+            }
+
+        time.sleep(2)  # avoid API limit
+
+    # ===== SEND ONLY BEST TRADE =====
+    if best_trade and best_trade["score"] >= 5:
+        send_signal(
+            best_trade["pair"],
+            best_trade["signal"],
+            best_trade["price"]
+        )
+    else:
+        print("No strong trade (sideways market)")
+
+    time.sleep(60)
