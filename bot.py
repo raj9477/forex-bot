@@ -3,7 +3,7 @@ import time
 import datetime
 
 # ===== CONFIG =====
-BOT_TOKEN = "8840298233:AAG0jITQkx_pO2ySn3u44TdHacC5WsKwfhE"
+BOT_TOKEN = "8840298233:AAFaSzKGKlwkQPgIN9jujcGYk-nUPHSUs38"
 CHAT_ID = "PROFIT_ZONE_947"
 API_KEY = "aa164586e0b24b348f49fd3b534ce8cc"
 
